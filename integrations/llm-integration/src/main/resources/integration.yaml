@@ -1,0 +1,6 @@
+integration:
+  llm-integration:
+    name: "LLM Integration"
+    description: "Connect to Ollama, OpenAI, Anthropic, or OpenRouter to generate AI completions"
+    icon-url: "public/ollama-logo.svg"
+    enabled: true

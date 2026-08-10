@@ -5,6 +5,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.milesight.beaveriot.base.enums.ErrorCode;
 import com.milesight.beaveriot.base.exception.ServiceException;
 import com.milesight.beaveriot.context.api.*;
+import com.milesight.beaveriot.context.integration.model.DeviceLocation;
+import com.milesight.beaveriot.context.integration.model.Device;
+import com.milesight.beaveriot.context.integration.model.ExchangePayload;
 import com.milesight.beaveriot.context.integration.model.DeviceStatus;
 import com.milesight.beaveriot.context.model.response.DeviceTemplateInputResult;
 import com.milesight.beaveriot.context.mqtt.enums.MqttQos;
@@ -58,6 +61,9 @@ public class MsGwMqttClient {
     DeviceStatusServiceProvider deviceStatusServiceProvider;
 
     @Autowired
+    DeviceLocationServiceProvider deviceLocationServiceProvider;
+
+    @Autowired
     MsGwStatus msGwStatus;
 
     @Autowired
@@ -86,6 +92,11 @@ public class MsGwMqttClient {
         mqttServiceProvider.onDisconnect(this::onGatewayDisconnect);
     }
 
+    /** Entity identifiers a device uses to report its position. */
+    private static final String LATITUDE_ENTITY_IDENTIFIER = "latitude";
+
+    private static final String LONGITUDE_ENTITY_IDENTIFIER = "longitude";
+
     private void onDataUplink(String gatewayEui, String message) {
         log.debug("{} uplink: {}", gatewayEui, message);
         try {
@@ -98,6 +109,7 @@ public class MsGwMqttClient {
 
             log.debug("Payload: {}", inputResult.getPayload());
             entityValueServiceProvider.saveValuesAndPublishAsync(inputResult.getPayload(), "DEVICE_UPLINK");
+            updateDeviceLocation(deviceKey, inputResult);
             requestCoalescer.executeAsync(deviceKey + "-" + DeviceStatus.ONLINE, () -> {
                 deviceStatusServiceProvider.online(inputResult.getDevice());
                 return deviceKey;
@@ -107,6 +119,47 @@ public class MsGwMqttClient {
         }
 
         msGwStatus.updateGatewayStatus(gatewayEui, DeviceStatus.ONLINE, System.currentTimeMillis());
+    }
+
+    /**
+     * Feed a reported position through to the device's location.
+     * <p>
+     * A tracker decodes its coordinates into ordinary entities, but the platform keeps
+     * device location separately under {@code @location}, and that is what the map reads.
+     * By convention a device reporting entities named {@code latitude} and
+     * {@code longitude} has them mirrored onto its location, which both places the device
+     * on the map and — since location entities are properties — records the position
+     * history that a movement trail is drawn from.
+     */
+    private void updateDeviceLocation(String deviceKey, DeviceTemplateInputResult inputResult) {
+        Device device = inputResult.getDevice();
+        ExchangePayload payload = inputResult.getPayload();
+        if (device == null || payload == null) {
+            return;
+        }
+
+        Double latitude = toCoordinate(payload.get(deviceKey + "." + LATITUDE_ENTITY_IDENTIFIER));
+        Double longitude = toCoordinate(payload.get(deviceKey + "." + LONGITUDE_ENTITY_IDENTIFIER));
+        // Both are needed; a partial fix would move the marker to a bogus position.
+        if (latitude == null || longitude == null) {
+            return;
+        }
+
+        try {
+            deviceLocationServiceProvider.setLocation(device, DeviceLocation.of(latitude, longitude, null));
+        } catch (Exception e) {
+            // Location is secondary to the uplink itself, so never fail the uplink for it.
+            log.warn("Unable to update location of device {}: {}", deviceKey, e.getMessage());
+        }
+    }
+
+    private Double toCoordinate(Object value) {
+        if (value instanceof Number number) {
+            double result = number.doubleValue();
+            // Decoders emit 0/0 when they have no fix; treat that as "no position".
+            return result == 0d ? null : result;
+        }
+        return null;
     }
 
     private void onResponse(String gatewayEui, String message, MqttMessage mqttMessage) {

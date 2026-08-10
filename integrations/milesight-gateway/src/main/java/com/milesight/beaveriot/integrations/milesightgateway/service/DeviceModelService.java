@@ -30,6 +30,9 @@ public class DeviceModelService {
     @Autowired
     BlueprintLibraryResourceResolverProvider blueprintLibraryResourceResolverProvider;
 
+    @Autowired
+    CustomDeviceModelService customDeviceModelService;
+
     private void iterateDeviceModels(BiConsumer<BlueprintDeviceVendor, BlueprintDeviceModel> consumer) {
         List<BlueprintDeviceVendor> vendors = blueprintLibraryResourceResolverProvider.getDeviceVendors();
         vendors.forEach(vendor -> {
@@ -57,6 +60,13 @@ public class DeviceModelService {
                     model.getName() + " (" + vendor.getName() + ")"
                 )
         );
+
+        // Custom models are stored as blueprint-less device templates owned by this
+        // integration, and share the picker with the blueprint-provided ones.
+        customDeviceModelService.listCustomModels().forEach(deviceTemplate -> modelIdToName.put(
+                new DeviceModelIdentifier(CustomDeviceModelService.CUSTOM_VENDOR_ID, deviceTemplate.getIdentifier()).toString(),
+                deviceTemplate.getName() + " (Custom)"
+        ));
 
         attributes.put(AttributeBuilder.ATTRIBUTE_ENUM, modelIdToName);
         deviceModelNameEntity.setAttributes(attributes);

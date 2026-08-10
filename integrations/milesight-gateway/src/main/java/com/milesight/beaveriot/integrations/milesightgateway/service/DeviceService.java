@@ -11,6 +11,7 @@ import com.milesight.beaveriot.context.api.EntityValueServiceProvider;
 import com.milesight.beaveriot.context.integration.enums.AccessMod;
 import com.milesight.beaveriot.context.integration.enums.EntityValueType;
 import com.milesight.beaveriot.context.integration.model.Device;
+import com.milesight.beaveriot.context.integration.model.DeviceTemplate;
 import com.milesight.beaveriot.context.integration.model.Entity;
 import com.milesight.beaveriot.context.integration.model.EntityBuilder;
 import com.milesight.beaveriot.context.integration.model.ExchangePayload;
@@ -44,6 +45,7 @@ import org.springframework.util.StringUtils;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BiFunction;
 
 /**
  * DeviceService class.
@@ -56,6 +58,9 @@ import java.util.concurrent.atomic.AtomicReference;
 public class DeviceService {
     @Autowired
     DeviceServiceProvider deviceServiceProvider;
+
+    @Autowired
+    CustomDeviceModelService customDeviceModelService;
 
     @Autowired
     MsGwEntityService msGwEntityService;
@@ -128,12 +133,7 @@ public class DeviceService {
         final DeviceService self = self();
         AtomicReference<String> timeoutEntityKey = new AtomicReference<>();
 
-        deviceTemplateParserProvider.createDevice(
-                Constants.INTEGRATION_ID,
-                modelIdentifier.getVendorId(),
-                modelIdentifier.getModelId(),
-                GatewayString.standardizeEUI(deviceData.getEui()),
-                deviceName,
+        BiFunction<Device, Map<String, Object>, Boolean> beforeSaveDevice =
                 (device, metadata) -> {
                     List<Entity> entities = new ArrayList<>(device.getEntities());
                     Entity timeoutEntity = generateOfflineTimeoutEntity(device.getKey());
@@ -189,11 +189,48 @@ public class DeviceService {
                     this.registerTransactionRollback(() -> gatewayRequester.requestDeleteDeviceAsync(List.of(deviceEUI)));
 
                     return true;
-                });
+                };
+
+        createDeviceFromModel(modelIdentifier, GatewayString.standardizeEUI(deviceData.getEui()), deviceName, beforeSaveDevice);
 
         entityValueServiceProvider.saveLatestValues(ExchangePayload.create(Map.of(
                 timeoutEntityKey.get(), addDevice.getOfflineTimeout()
         )));
+    }
+
+    /**
+     * Create the device from either a custom device model or a blueprint one.
+     * <p>
+     * Custom models are stored as device templates owned by this integration, so they are
+     * created by template id and need no blueprint library behind them.
+     */
+    private void createDeviceFromModel(DeviceModelIdentifier modelIdentifier,
+                                       String deviceIdentifier,
+                                       String deviceName,
+                                       BiFunction<Device, Map<String, Object>, Boolean> beforeSaveDevice) {
+        if (CustomDeviceModelService.isCustomModel(modelIdentifier.getVendorId())) {
+            DeviceTemplate deviceTemplate = customDeviceModelService.getByIdentifier(modelIdentifier.getModelId());
+            if (deviceTemplate == null) {
+                throw ServiceException.with(ErrorCode.PARAMETER_VALIDATION_FAILED.getErrorCode(),
+                        "Custom device model not found: " + modelIdentifier.getModelId()).build();
+            }
+
+            deviceTemplateParserProvider.createDevice(
+                    Constants.INTEGRATION_ID,
+                    deviceTemplate.getId(),
+                    deviceIdentifier,
+                    deviceName,
+                    beforeSaveDevice);
+            return;
+        }
+
+        deviceTemplateParserProvider.createDevice(
+                Constants.INTEGRATION_ID,
+                modelIdentifier.getVendorId(),
+                modelIdentifier.getModelId(),
+                deviceIdentifier,
+                deviceName,
+                beforeSaveDevice);
     }
 
     private void registerTransactionRollback(Runnable runnable)  {

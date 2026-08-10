@@ -8,6 +8,7 @@ import com.milesight.beaveriot.base.exception.ServiceException;
 import com.milesight.beaveriot.context.api.DeviceTemplateParserProvider;
 import com.milesight.beaveriot.context.api.EntityValueServiceProvider;
 import com.milesight.beaveriot.context.integration.model.Device;
+import com.milesight.beaveriot.context.integration.model.DeviceTemplate;
 import com.milesight.beaveriot.context.integration.model.Entity;
 import com.milesight.beaveriot.context.integration.model.ExchangePayload;
 import com.milesight.beaveriot.integrations.milesightgateway.model.DeviceModelIdentifier;
@@ -15,6 +16,7 @@ import com.milesight.beaveriot.integrations.milesightgateway.model.GatewayData;
 import com.milesight.beaveriot.integrations.milesightgateway.model.GatewayDeviceData;
 import com.milesight.beaveriot.integrations.milesightgateway.model.GatewayDeviceOperation;
 import com.milesight.beaveriot.integrations.milesightgateway.model.api.DeviceListItemFields;
+import com.milesight.beaveriot.integrations.milesightgateway.model.request.SyncDeviceItem;
 import com.milesight.beaveriot.integrations.milesightgateway.model.request.SyncGatewayDeviceRequest;
 import com.milesight.beaveriot.integrations.milesightgateway.model.response.SyncDeviceListItem;
 import com.milesight.beaveriot.integrations.milesightgateway.requester.GatewayRequester;
@@ -33,6 +35,7 @@ import org.springframework.util.StringUtils;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BiFunction;
 
 import static com.milesight.beaveriot.integrations.milesightgateway.mqtt.MsGwMqttClient.GATEWAY_REQUEST_BATCH_SIZE;
 
@@ -53,6 +56,9 @@ public class SyncGatewayDeviceService {
 
     @Autowired
     DeviceService deviceService;
+
+    @Autowired
+    CustomDeviceModelService customDeviceModelService;
 
     @Autowired
     DeviceModelService deviceModelService;
@@ -115,6 +121,25 @@ public class SyncGatewayDeviceService {
         String deviceName;
     }
 
+    private Map<String, Long> resolveOfflineTimeouts(List<SyncDeviceItem> devices) {
+        Map<String, Long> result = new HashMap<>();
+        devices.forEach(syncRequest -> {
+            Long offlineTimeout = syncRequest.getOfflineTimeout();
+            if (offlineTimeout == null) {
+                result.put(syncRequest.getEui(), Constants.DEFAULT_DEVICE_OFFLINE_TIMEOUT);
+                return;
+            }
+            if (offlineTimeout < Constants.OFFLINE_TIMEOUT_ENTITY_MIN_VALUE || offlineTimeout > Constants.OFFLINE_TIMEOUT_ENTITY_MAX_VALUE) {
+                throw ServiceException.with(ErrorCode.PARAMETER_VALIDATION_FAILED.getErrorCode(),
+                        "Offline timeout for device " + syncRequest.getEui() + " must be between "
+                                + Constants.OFFLINE_TIMEOUT_ENTITY_MIN_VALUE + " and " + Constants.OFFLINE_TIMEOUT_ENTITY_MAX_VALUE + " minutes")
+                        .build();
+            }
+            result.put(syncRequest.getEui(), offlineTimeout);
+        });
+        return result;
+    }
+
     @DistributedLock(name = LockConstants.SYNC_GATEWAY_DEVICE_LOCK)
     public void syncGatewayDevice(String gatewayEui, SyncGatewayDeviceRequest request) {
         Device gateway = gatewayService.getGatewayByEui(gatewayEui);
@@ -122,6 +147,9 @@ public class SyncGatewayDeviceService {
 
         // check connection of gateway. In case a large number of doomed-to-fail requests were sent.
         gatewayRequester.requestBase();
+
+        // validate offline timeouts up front so a bad value fails before any gateway calls
+        Map<String, Long> offlineTimeoutsByEui = resolveOfflineTimeouts(request.getDevices());
 
         // batch reset device codec
         List<UpdateGatewayDeviceResponse> deviceItemList = new ArrayList<>();
@@ -168,23 +196,42 @@ public class SyncGatewayDeviceService {
             // save device
             deviceService.manageGatewayDevices(deviceData.getGatewayEUI(), deviceData.getEui(), GatewayDeviceOperation.ADD);
             AtomicReference<String> timeoutEntityKey = new AtomicReference<>();
-            deviceTemplateParserProvider.createDevice(
-                    Constants.INTEGRATION_ID,
-                    deviceModelIdentifier.getVendorId(),
-                    deviceModelIdentifier.getModelId(),
-                    GatewayString.standardizeEUI(deviceData.getEui()),
-                    deviceItem.getDeviceName(),
-                    (device, metadata) -> {
-                        List<Entity> entities = new ArrayList<>(device.getEntities());
-                        Entity timeoutEntity = deviceService.generateOfflineTimeoutEntity(device.getKey());
-                        entities.add(timeoutEntity);
-                        timeoutEntityKey.set(timeoutEntity.getKey());
-                        device.setEntities(entities);
-                        device.setAdditional(json.convertValue(deviceData, new TypeReference<>() {}));
-                        return true;
-                    });
+            BiFunction<Device, Map<String, Object>, Boolean> beforeSaveDevice = (device, metadata) -> {
+                List<Entity> entities = new ArrayList<>(device.getEntities());
+                Entity timeoutEntity = deviceService.generateOfflineTimeoutEntity(device.getKey());
+                entities.add(timeoutEntity);
+                timeoutEntityKey.set(timeoutEntity.getKey());
+                device.setEntities(entities);
+                device.setAdditional(json.convertValue(deviceData, new TypeReference<>() {}));
+                return true;
+            };
+
+            // Custom models have no blueprint behind them, so they are created by template id.
+            if (CustomDeviceModelService.isCustomModel(deviceModelIdentifier.getVendorId())) {
+                DeviceTemplate deviceTemplate = customDeviceModelService.getByIdentifier(deviceModelIdentifier.getModelId());
+                if (deviceTemplate == null) {
+                    throw ServiceException.with(ErrorCode.PARAMETER_VALIDATION_FAILED.getErrorCode(),
+                            "Custom device model not found: " + deviceModelIdentifier.getModelId()).build();
+                }
+
+                deviceTemplateParserProvider.createDevice(
+                        Constants.INTEGRATION_ID,
+                        deviceTemplate.getId(),
+                        GatewayString.standardizeEUI(deviceData.getEui()),
+                        deviceItem.getDeviceName(),
+                        beforeSaveDevice);
+            } else {
+                deviceTemplateParserProvider.createDevice(
+                        Constants.INTEGRATION_ID,
+                        deviceModelIdentifier.getVendorId(),
+                        deviceModelIdentifier.getModelId(),
+                        GatewayString.standardizeEUI(deviceData.getEui()),
+                        deviceItem.getDeviceName(),
+                        beforeSaveDevice);
+            }
+            long offlineTimeout = offlineTimeoutsByEui.getOrDefault(deviceData.getEui(), Constants.DEFAULT_DEVICE_OFFLINE_TIMEOUT);
             entityValueServiceProvider.saveLatestValues(ExchangePayload.create(Map.of(
-                    timeoutEntityKey.get(), Constants.DEFAULT_DEVICE_OFFLINE_TIMEOUT
+                    timeoutEntityKey.get(), offlineTimeout
             )));
         });
     }

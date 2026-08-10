@@ -39,10 +39,11 @@
         <module>sample-integrations</module>
         <module>ping</module>
         <module>msc-integration</module>
-        <module>ollama-integration</module>
+        <module>llm-integration</module>
         <module>milesight-gateway</module>
         <module>camthink-ai-inference</module>
         <module>mqtt-device</module>
+        <module>iriv-ioc-mqtt-gateway</module>
     </modules>
 
     <properties>

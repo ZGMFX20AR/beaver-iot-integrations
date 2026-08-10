@@ -13,4 +13,11 @@ public class SyncDeviceItem {
     private String eui;
 
     private String modelId;
+
+    /**
+     * Offline timeout in minutes. Optional - falls back to
+     * {@link com.milesight.beaveriot.integrations.milesightgateway.util.Constants#DEFAULT_DEVICE_OFFLINE_TIMEOUT}
+     * when omitted or out of range.
+     */
+    private Long offlineTimeout;
 }

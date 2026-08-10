@@ -1,0 +1,21 @@
+name: Notify beaver-iot-docker to rebuild
+
+# See beaver-iot/.github/workflows/notify-docker-build.yml for the full explanation.
+# Requires the same DISPATCH_TOKEN secret, added here too (secrets don't cross repos).
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch build to beaver-iot-docker
+        env:
+          GH_TOKEN: ${{ secrets.DISPATCH_TOKEN }}
+        run: |
+          gh api repos/${{ github.repository_owner }}/beaver-iot-docker/dispatches \
+            -f event_type=source-updated \
+            -f "client_payload[branch]=${{ github.ref_name }}" \
+            -f "client_payload[source]=beaver-iot-integrations"

@@ -1,0 +1,8 @@
+integration:
+  iriv-ioc-mqtt-gateway: # integration identifier
+    name: IRIV-IOC MQTT Gateway # integration name
+    description: "Connects IRIV-IOC MQTT Gateway devices (Modbus RTU, digital/analog IO over MQTT) to Beaver IoT." # integration description
+    enabled: true # whether enable this integration. Must be "true" for now
+    icon-url: "public/iriv-ioc-mqtt-gateway-logo.png"
+    entity-identifier-add-device: add_device
+    entity-identifier-delete-device: delete_device

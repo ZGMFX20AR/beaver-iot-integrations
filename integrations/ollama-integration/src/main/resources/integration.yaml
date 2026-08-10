@@ -1,6 +1,0 @@
-integration:
-  ollama-integration:
-    name: "Ollama Integration"
-    description: "Ollama Integration"
-    icon-url: "public/ollama-logo.svg"
-    enabled: true
