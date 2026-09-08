@@ -33,6 +33,13 @@
             <artifactId>context</artifactId>
             <scope>provided</scope>
         </dependency>
+        <!-- For the custom device model codec test-preview endpoint (ICodecExecutorFacade) -->
+        <dependency>
+            <groupId>com.milesight.beaveriot</groupId>
+            <artifactId>device-template-api</artifactId>
+            <version>${project.version}</version>
+            <scope>provided</scope>
+        </dependency>
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>

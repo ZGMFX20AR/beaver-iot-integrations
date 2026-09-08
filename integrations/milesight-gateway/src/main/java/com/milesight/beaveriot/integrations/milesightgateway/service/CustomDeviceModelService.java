@@ -1,5 +1,6 @@
 package com.milesight.beaveriot.integrations.milesightgateway.service;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.milesight.beaveriot.base.enums.ErrorCode;
 import com.milesight.beaveriot.base.exception.ServiceException;
 import com.milesight.beaveriot.base.utils.StringUtils;
@@ -12,15 +13,21 @@ import com.milesight.beaveriot.context.integration.model.DeviceTemplateBuilder;
 import com.milesight.beaveriot.context.integration.model.config.EntityConfig;
 import com.milesight.beaveriot.context.model.DeviceTemplateModel;
 import com.milesight.beaveriot.base.utils.YamlUtils;
+import com.milesight.beaveriot.devicetemplate.facade.ICodecExecutorFacade;
+import com.milesight.beaveriot.devicetemplate.facade.IDeviceCodecExecutorFacade;
 import com.milesight.beaveriot.integrations.milesightgateway.model.request.CustomDeviceModelRequest;
+import com.milesight.beaveriot.integrations.milesightgateway.model.request.TestCodecRequest;
+import com.milesight.beaveriot.integrations.milesightgateway.model.response.TestCodecResponse;
 import com.milesight.beaveriot.integrations.milesightgateway.util.Constants;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Component;
 import org.springframework.util.CollectionUtils;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -67,6 +74,10 @@ public class CustomDeviceModelService {
 
     @Autowired
     DeviceTemplateServiceProvider deviceTemplateServiceProvider;
+
+    @Lazy
+    @Autowired
+    ICodecExecutorFacade codecExecutorFacade;
 
     /**
      * Whether the given device model identifier refers to a custom model.
@@ -136,6 +147,69 @@ public class CustomDeviceModelService {
         }
 
         deviceTemplateServiceProvider.deleteById(existing.getId());
+    }
+
+    /**
+     * Decode a sample payload with an in-progress (possibly unsaved) codec, so the
+     * editor can show real decode output/errors before the model is saved or a device
+     * exists. Never throws - failures are reported via {@link TestCodecResponse#getErrorMessage()}
+     * so a broken codec while editing is treated as an expected outcome, not a system error.
+     */
+    public TestCodecResponse testCodec(TestCodecRequest request) {
+        if (request == null || StringUtils.isEmpty(request.getCodecCode())) {
+            return TestCodecResponse.failed("Decoder source is required");
+        }
+
+        byte[] payload;
+        try {
+            payload = parseHexPayload(request.getPayloadHex());
+        } catch (IllegalArgumentException e) {
+            return TestCodecResponse.failed(e.getMessage());
+        }
+
+        DeviceTemplateModel model = new DeviceTemplateModel();
+        DeviceTemplateModel.Codec codec = new DeviceTemplateModel.Codec();
+        codec.setCode(request.getCodecCode());
+        codec.setEntry(StringUtils.isEmpty(request.getCodecEntry()) ? DEFAULT_CODEC_ENTRY : request.getCodecEntry());
+        model.setCodec(codec);
+
+        IDeviceCodecExecutorFacade executor = codecExecutorFacade.getInlineDeviceCodecExecutor(model);
+        if (executor == null) {
+            return TestCodecResponse.failed("Could not build a decoder from the given code and entry function");
+        }
+
+        Map<String, Object> argContext = Map.of("fPort", request.getFPort() == null ? 0 : request.getFPort());
+        try {
+            JsonNode result = executor.decode(payload, argContext);
+            return TestCodecResponse.ok(result);
+        } catch (ServiceException e) {
+            String detail = e.getDetailMessage();
+            return TestCodecResponse.failed(StringUtils.isEmpty(detail) ? e.getMessage() : detail);
+        } catch (Exception e) {
+            log.error("Codec test failed", e);
+            return TestCodecResponse.failed(e.getMessage());
+        }
+    }
+
+    /**
+     * Parses a hex-encoded sample payload, tolerating an optional "0x" prefix and
+     * whitespace between bytes.
+     */
+    private static byte[] parseHexPayload(String hex) {
+        if (StringUtils.isEmpty(hex)) {
+            return new byte[0];
+        }
+
+        String cleaned = hex.trim().replaceAll("^0[xX]", "").replaceAll("\\s+", "");
+        if (cleaned.length() % 2 != 0) {
+            throw new IllegalArgumentException("Hex payload must have an even number of characters");
+        }
+
+        try {
+            return HexFormat.of().parseHex(cleaned);
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("Payload is not valid hex: " + e.getMessage());
+        }
     }
 
     private void validate(CustomDeviceModelRequest request) {

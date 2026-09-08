@@ -4,7 +4,9 @@ import com.milesight.beaveriot.base.response.ResponseBody;
 import com.milesight.beaveriot.base.response.ResponseBuilder;
 import com.milesight.beaveriot.context.integration.model.DeviceTemplate;
 import com.milesight.beaveriot.integrations.milesightgateway.model.request.CustomDeviceModelRequest;
+import com.milesight.beaveriot.integrations.milesightgateway.model.request.TestCodecRequest;
 import com.milesight.beaveriot.integrations.milesightgateway.model.response.CustomDeviceModelResponse;
+import com.milesight.beaveriot.integrations.milesightgateway.model.response.TestCodecResponse;
 import com.milesight.beaveriot.integrations.milesightgateway.service.CustomDeviceModelService;
 import com.milesight.beaveriot.integrations.milesightgateway.service.DeviceModelService;
 import com.milesight.beaveriot.integrations.milesightgateway.util.Constants;
@@ -63,5 +65,15 @@ public class MilesightGatewayCustomModelController {
         customDeviceModelService.deleteCustomModel(identifier);
         deviceModelService.syncDeviceModelListToAdd();
         return ResponseBuilder.success();
+    }
+
+    /**
+     * Decode a sample payload with an in-progress (possibly unsaved) codec - nothing is
+     * persisted, so this can be called freely while iterating on the code before saving
+     * the model or adding a real device.
+     */
+    @PostMapping("/test-codec")
+    public ResponseBody<TestCodecResponse> testCodec(@RequestBody TestCodecRequest request) {
+        return ResponseBuilder.success(customDeviceModelService.testCodec(request));
     }
 }
