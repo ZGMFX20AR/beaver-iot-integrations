@@ -129,7 +129,14 @@ function vendorDecode(fPort, bytes, variables) {
    case-sensitive, no fuzzy matching.
 6. **Device EUI must exactly match** what the gateway publishes in the uplink -
    mismatches fail before decode even runs.
-7. **If you add entities to the model after a device already exists**, use the
-   device's Resync Entities action (the sync icon next to it in the Synced Devices
-   list) - editing a model doesn't retroactively add fields to already-created
-   devices.
+7. **Editing a model applies to devices already created from it.** Saving the model
+   pushes newly added entities, and changed units and display names, onto every
+   device using it. Devices keep their recorded values - the entities are updated in
+   place, not rebuilt. (This did not always hold: a device's entities used to be
+   built once at creation, so edits only ever reached devices created afterwards.)
+   The device's Resync Entities action (the sync icon next to it in the Synced
+   Devices list) does the same job for a single device, if you ever need it.
+8. **Changing an entity's value type is the exception** - that does not propagate,
+   deliberately, since rewriting a type underneath values already recorded against
+   the entity is a good deal riskier than relabelling one. Recreate the device if you
+   need to change a type.
