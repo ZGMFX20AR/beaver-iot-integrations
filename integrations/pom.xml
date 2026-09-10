@@ -44,6 +44,7 @@
         <module>camthink-ai-inference</module>
         <module>mqtt-device</module>
         <module>iriv-ioc-mqtt-gateway</module>
+        <module>edgeai-stream</module>
     </modules>
 
     <properties>

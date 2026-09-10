@@ -1,0 +1,6 @@
+integration:
+  edgeai-stream:
+    name: EdgeAI Camera Streams
+    description: "Relays MJPEG video pipelines from EdgeAI boxes so dashboard widgets can display them, without the browser needing the box's API key or trusting its certificate."
+    icon-url: "public/edgeai-stream.svg"
+    enabled: true
