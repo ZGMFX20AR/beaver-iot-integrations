@@ -70,5 +70,22 @@ public class CustomDeviceModelRequest {
          * Optional unit shown alongside the value.
          */
         private String unit;
+
+        /**
+         * Label shown in place of a raw {@code true} for a BOOLEAN entity, e.g. "Alarm".
+         * Ignored for every other value type.
+         * <p>
+         * Dashboard widgets key their per-state label, icon and colour off an entity's
+         * {@code enum} attribute rather than off its value type, so a boolean without one
+         * renders as a bare true/false with a single appearance. This and
+         * {@link #falseLabel} are what let a custom model declare that enum.
+         */
+        private String trueLabel;
+
+        /**
+         * Label shown in place of a raw {@code false} for a BOOLEAN entity, e.g. "Normal".
+         * See {@link #trueLabel}.
+         */
+        private String falseLabel;
     }
 }

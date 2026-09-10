@@ -12,6 +12,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.util.CollectionUtils;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * A custom device model as shown in the gateway UI.
@@ -69,6 +70,12 @@ public class CustomDeviceModelResponse {
         private String name;
         private String valueType;
         private String unit;
+        /**
+         * State labels of a BOOLEAN entity, read back out of its {@code enum} attribute so
+         * the editor can round-trip them rather than losing them on the next save.
+         */
+        private String trueLabel;
+        private String falseLabel;
     }
 
     public static CustomDeviceModelResponse of(DeviceTemplate deviceTemplate) {
@@ -132,6 +139,13 @@ public class CustomDeviceModelResponse {
                 if (entityConfig.getAttributes() != null) {
                     Object unit = entityConfig.getAttributes().get("unit");
                     entity.setUnit(unit == null ? null : String.valueOf(unit));
+
+                    if (entityConfig.getAttributes().get("enum") instanceof Map<?, ?> valueEnum) {
+                        Object trueLabel = valueEnum.get("true");
+                        Object falseLabel = valueEnum.get("false");
+                        entity.setTrueLabel(trueLabel == null ? null : String.valueOf(trueLabel));
+                        entity.setFalseLabel(falseLabel == null ? null : String.valueOf(falseLabel));
+                    }
                 }
                 return entity;
             }).toList());

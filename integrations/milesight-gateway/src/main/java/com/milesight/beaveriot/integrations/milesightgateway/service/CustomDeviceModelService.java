@@ -378,15 +378,42 @@ public class CustomDeviceModelService {
             // Uplink-reported values are read-only from the platform's point of view.
             config.put("access_mod", AccessMod.R.name());
 
+            Map<String, Object> attributes = new LinkedHashMap<>();
             if (!StringUtils.isEmpty(entity.getUnit())) {
-                Map<String, Object> attributes = new LinkedHashMap<>();
                 attributes.put("unit", entity.getUnit());
+            }
+            Map<String, Object> valueEnum = buildBooleanEnum(entity);
+            if (valueEnum != null) {
+                attributes.put("enum", valueEnum);
+            }
+            if (!attributes.isEmpty()) {
                 config.put("attributes", attributes);
             }
 
             entities.add(config);
         }
         return entities;
+    }
+
+    /**
+     * The {@code enum} attribute for a BOOLEAN entity that declares state labels, or null.
+     * <p>
+     * Keys are the literal strings "false" and "true", matching what blueprint models emit
+     * and what the dashboard widgets look the current value up by. Both labels have to be
+     * present to be worth writing: a half-filled enum would leave one state rendering as a
+     * bare true/false while the other showed a label.
+     */
+    private Map<String, Object> buildBooleanEnum(CustomDeviceModelRequest.EntityDefinition entity) {
+        if (parseValueType(entity) != EntityValueType.BOOLEAN
+                || StringUtils.isEmpty(entity.getTrueLabel())
+                || StringUtils.isEmpty(entity.getFalseLabel())) {
+            return null;
+        }
+
+        Map<String, Object> valueEnum = new LinkedHashMap<>();
+        valueEnum.put("false", entity.getFalseLabel());
+        valueEnum.put("true", entity.getTrueLabel());
+        return valueEnum;
     }
 
     /**
