@@ -4,10 +4,12 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.milesight.beaveriot.base.enums.ErrorCode;
 import com.milesight.beaveriot.base.exception.ServiceException;
 import com.milesight.beaveriot.base.utils.StringUtils;
+import com.milesight.beaveriot.context.api.DeviceServiceProvider;
 import com.milesight.beaveriot.context.api.DeviceTemplateServiceProvider;
 import com.milesight.beaveriot.context.integration.enums.AccessMod;
 import com.milesight.beaveriot.context.integration.enums.EntityType;
 import com.milesight.beaveriot.context.integration.enums.EntityValueType;
+import com.milesight.beaveriot.context.integration.model.Device;
 import com.milesight.beaveriot.context.integration.model.DeviceTemplate;
 import com.milesight.beaveriot.context.integration.model.DeviceTemplateBuilder;
 import com.milesight.beaveriot.context.integration.model.config.EntityConfig;
@@ -15,6 +17,7 @@ import com.milesight.beaveriot.context.model.DeviceTemplateModel;
 import com.milesight.beaveriot.base.utils.YamlUtils;
 import com.milesight.beaveriot.devicetemplate.facade.ICodecExecutorFacade;
 import com.milesight.beaveriot.devicetemplate.facade.IDeviceCodecExecutorFacade;
+import com.milesight.beaveriot.devicetemplate.facade.IDeviceTemplateParserFacade;
 import com.milesight.beaveriot.integrations.milesightgateway.model.request.CustomDeviceModelRequest;
 import com.milesight.beaveriot.integrations.milesightgateway.model.request.TestCodecRequest;
 import com.milesight.beaveriot.integrations.milesightgateway.model.response.TestCodecResponse;
@@ -32,6 +35,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 
 /**
@@ -75,9 +79,16 @@ public class CustomDeviceModelService {
     @Autowired
     DeviceTemplateServiceProvider deviceTemplateServiceProvider;
 
+    @Autowired
+    DeviceServiceProvider deviceServiceProvider;
+
     @Lazy
     @Autowired
     ICodecExecutorFacade codecExecutorFacade;
+
+    @Lazy
+    @Autowired
+    IDeviceTemplateParserFacade deviceTemplateParserFacade;
 
     /**
      * Whether the given device model identifier refers to a custom model.
@@ -120,8 +131,8 @@ public class CustomDeviceModelService {
     }
 
     /**
-     * Replace the definition of an existing custom model. Devices already created from it
-     * keep their entities; only subsequently decoded uplinks use the new definition.
+     * Replace the definition of an existing custom model, then bring devices already created
+     * from it up to date with the new definition.
      */
     public DeviceTemplate updateCustomModel(String identifier, CustomDeviceModelRequest request) {
         validate(request);
@@ -136,7 +147,39 @@ public class CustomDeviceModelService {
         existing.setDescription(request.getDescription());
         existing.setContent(buildTemplateContent(request));
         deviceTemplateServiceProvider.save(existing);
+        applyToExistingDevices(existing);
         return existing;
+    }
+
+    /**
+     * Push the model's current entity definitions onto the devices already created from it.
+     * <p>
+     * A device's entities are built once, when the device is created, so without this an edit
+     * only ever reached devices created afterwards: changing an entity's unit updated the model
+     * while every existing device kept displaying the old one, with nothing to explain the
+     * mismatch. Resyncing per device is still available for the same job; this just means the
+     * common case does not depend on the user knowing to go and click it.
+     */
+    private void applyToExistingDevices(DeviceTemplate deviceTemplate) {
+        List<Device> devices = deviceServiceProvider.findAll(Constants.INTEGRATION_ID);
+        if (CollectionUtils.isEmpty(devices)) {
+            return;
+        }
+
+        for (Device device : devices) {
+            if (!Objects.equals(device.getTemplate(), deviceTemplate.getKey())) {
+                continue;
+            }
+            // The model itself is already saved, so one uncooperative device must not fail the
+            // whole edit and leave the user unable to save at all - it just stays stale, and a
+            // manual resync remains available for it.
+            try {
+                deviceTemplateParserFacade.resyncDeviceEntities(device.getKey());
+            } catch (Exception e) {
+                log.warn("Could not apply custom model '{}' to device {}",
+                        deviceTemplate.getIdentifier(), device.getKey(), e);
+            }
+        }
     }
 
     public void deleteCustomModel(String identifier) {
