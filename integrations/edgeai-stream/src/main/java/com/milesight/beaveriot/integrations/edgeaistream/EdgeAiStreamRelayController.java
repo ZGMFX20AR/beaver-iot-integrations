@@ -1,6 +1,5 @@
 package com.milesight.beaveriot.integrations.edgeaistream;
 
-import com.milesight.beaveriot.context.security.TenantContext;
 import com.milesight.beaveriot.integrations.edgeaistream.config.EdgeAiStreamingConfig;
 import com.milesight.beaveriot.integrations.edgeaistream.model.StreamSource;
 import com.milesight.beaveriot.integrations.edgeaistream.service.StreamSourceService;
@@ -79,20 +78,19 @@ public class EdgeAiStreamRelayController {
             return ResponseEntity.badRequest().build();
         }
 
-        StreamSource source;
-        Optional<String> apiKey;
-        // tryGetTenantId, not getTenantId: the latter throws when nothing is set, which is
-        // precisely the state an unauthenticated request arrives in.
-        Optional<String> previousTenant = TenantContext.tryGetTenantId();
-        try {
-            TenantContext.setTenantId(tenantId == null || tenantId.isEmpty() ? defaultTenant : tenantId);
-            source = streamSourceService.getSource(sourceId);
-            apiKey = streamSourceService.getApiKey(sourceId);
-        } finally {
-            // The request filter does not clear this, and Undertow reuses worker threads,
-            // so leaving it set would leak this tenant into the next request on this thread.
-            previousTenant.ifPresentOrElse(TenantContext::setTenantId, TenantContext::clear);
+        // Read from the cache, never the database. A query on this request would hold its
+        // JDBC connection until the request ends - and this request ends when the viewer
+        // leaves - so the eleventh concurrent viewer would exhaust Hikari's ten-connection
+        // pool and take the whole API down with it. See StreamSourceService#cacheByTenant.
+        String tenant = tenantId == null || tenantId.isEmpty() ? defaultTenant : tenantId;
+        Optional<StreamSourceService.CachedSource> cached =
+                streamSourceService.lookupForRelay(tenant, sourceId);
+        if (cached.isEmpty()) {
+            log.warn("No camera source '{}' known for tenant '{}'", sourceId, tenant);
+            return ResponseEntity.notFound().build();
         }
+        StreamSource source = cached.get().source();
+        Optional<String> apiKey = Optional.ofNullable(cached.get().apiKey());
 
         if (!permits.tryAcquire()) {
             log.warn("Refusing camera stream '{}': already relaying the maximum of {}",

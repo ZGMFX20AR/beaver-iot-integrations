@@ -7,6 +7,7 @@ import com.milesight.beaveriot.base.exception.ServiceException;
 import com.milesight.beaveriot.base.utils.StringUtils;
 import com.milesight.beaveriot.context.api.CredentialsServiceProvider;
 import com.milesight.beaveriot.context.api.EntityValueServiceProvider;
+import com.milesight.beaveriot.context.security.TenantContext;
 import com.milesight.beaveriot.context.integration.model.Credentials;
 import com.milesight.beaveriot.context.integration.model.ExchangePayload;
 import com.milesight.beaveriot.context.integration.wrapper.AnnotatedEntityWrapper;
@@ -22,6 +23,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Stores the configured camera sources, and their API keys.
@@ -38,11 +40,33 @@ import java.util.UUID;
 public class StreamSourceService {
     private final ObjectMapper json = new ObjectMapper();
 
+    /**
+     * Sources and their keys, by tenant, for the relay to read without touching the
+     * database.
+     * <p>
+     * This is not an optimisation, it is what makes concurrent viewing possible at all.
+     * {@code open-in-view} binds an EntityManager to the request, so a query on a stream
+     * request holds its JDBC connection until that request finishes - and a stream request
+     * finishes when the viewer leaves, possibly hours later. Measured: one viewer held one
+     * connection for the life of the stream, so with Hikari's default pool of ten, the
+     * eleventh viewer starved the entire application, not merely the streams. Ordinary API
+     * calls went from 17ms to HTTP 500 after the 5s connection timeout.
+     * <p>
+     * Kept fresh by reloading after every change, so the relay reads no database at all.
+     */
+    private final Map<String, Map<String, CachedSource>> cacheByTenant = new ConcurrentHashMap<>();
+
     @Autowired
     EntityValueServiceProvider entityValueServiceProvider;
 
     @Autowired
     CredentialsServiceProvider credentialsServiceProvider;
+
+    /**
+     * A source plus its key, as the relay needs it.
+     */
+    public record CachedSource(StreamSource source, String apiKey) {
+    }
 
     public List<StreamSource> listSources() {
         AnnotatedEntityWrapper<EdgeAiStreamEntities> wrapper = new AnnotatedEntityWrapper<>();
@@ -76,6 +100,32 @@ public class StreamSourceService {
                 .filter(key -> !StringUtils.isEmpty(key));
     }
 
+    /**
+     * Look a source up for the relay, without querying the database - see the note on
+     * {@link #cacheByTenant} for why that matters.
+     *
+     * @return empty if no such source is known to this tenant
+     */
+    public Optional<CachedSource> lookupForRelay(String tenantId, String sourceId) {
+        return Optional.ofNullable(cacheByTenant.get(tenantId))
+                .map(sources -> sources.get(sourceId));
+    }
+
+    /**
+     * Re-read this tenant's sources into the relay cache.
+     * <p>
+     * Must be called from a thread that can safely hold a database connection for the
+     * duration of the read - i.e. a normal request or startup, never a stream request.
+     */
+    public void refreshCache(String tenantId) {
+        Map<String, CachedSource> refreshed = new ConcurrentHashMap<>();
+        for (StreamSource source : listSources()) {
+            refreshed.put(source.getId(), new CachedSource(source, getApiKey(source.getId()).orElse(null)));
+        }
+        cacheByTenant.put(tenantId, refreshed);
+        log.debug("Cached {} camera source(s) for tenant '{}'", refreshed.size(), tenantId);
+    }
+
     public StreamSource createSource(String name, String host, String apiKey) {
         validate(name, host);
 
@@ -85,6 +135,7 @@ public class StreamSourceService {
 
         saveSources(sources);
         storeApiKey(source.getId(), apiKey);
+        refreshCacheForCurrentTenant();
         return source;
     }
 
@@ -107,6 +158,7 @@ public class StreamSourceService {
         if (!StringUtils.isEmpty(apiKey)) {
             storeApiKey(id, apiKey);
         }
+        refreshCacheForCurrentTenant();
         return source;
     }
 
@@ -118,6 +170,15 @@ public class StreamSourceService {
         }
         saveSources(sources);
         deleteApiKey(id);
+        refreshCacheForCurrentTenant();
+    }
+
+    /**
+     * Refresh the relay cache for whoever is making this change. Safe here because these
+     * are ordinary authenticated requests, not streams.
+     */
+    private void refreshCacheForCurrentTenant() {
+        TenantContext.tryGetTenantId().ifPresent(this::refreshCache);
     }
 
     /**
