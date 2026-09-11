@@ -103,6 +103,17 @@ public class MsGwMqttClient {
             MqttUplinkData uplinkData = json.readValue(message, MqttUplinkData.class);
             String deviceEui = GatewayString.standardizeEUI(uplinkData.getDevEUI());
 
+            // LoRaWAN uplinks need not carry an application payload - MAC-only frames such
+            // as link checks and ADR acknowledgements arrive with no data (and usually no
+            // fPort). There is nothing to decode, so skip them. Without this, one such device
+            // threw a NullPointerException out of Base64.decode about once a minute, every
+            // day, and each throw also skipped the gateway status refresh below.
+            if (uplinkData.getData() == null || uplinkData.getData().isEmpty()) {
+                log.debug("Uplink from {} carries no application payload; nothing to decode", deviceEui);
+                msGwStatus.updateGatewayStatus(gatewayEui, DeviceStatus.ONLINE, System.currentTimeMillis());
+                return;
+            }
+
             byte[] binData = Base64.getDecoder().decode(uplinkData.getData());
             String deviceKey = GatewayString.getDeviceKey(deviceEui);
             DeviceTemplateInputResult inputResult = deviceTemplateParserProvider.input(deviceKey, binData, Map.of("fPort", uplinkData.getFPort()));
