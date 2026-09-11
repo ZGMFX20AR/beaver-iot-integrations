@@ -72,9 +72,18 @@ public class EdgeAiStreamRelayController {
 
     @GetMapping("/{sourceId}/{pipelineId}")
     public ResponseEntity<StreamingResponseBody> stream(@PathVariable("sourceId") String sourceId,
-                                                        @PathVariable("pipelineId") String pipelineId,
+                                                        @PathVariable("pipelineId") String rawPipelineId,
                                                         @RequestParam(value = "tenantId", required = false) String tenantId) {
+        // Tolerate the id still wrapped in braces. The path is shown to users as a template
+        // ending in {pipelineId}, and the natural way to fill that in is to replace the word
+        // and keep the braces - which is exactly what happened the first time it was used.
+        // Stripping them is safe: what remains must still be digits, below.
+        String pipelineId = rawPipelineId.replaceAll("^\\{(.*)}$", "$1");
         if (!pipelineId.matches("\\d+")) {
+            // Logged, because this is otherwise invisible: an <img> cannot report the status
+            // it got, so the only trace of a malformed widget URL would be a broken image.
+            log.warn("Rejected camera stream request for source '{}': pipeline id '{}' is not a number",
+                    sourceId, rawPipelineId);
             return ResponseEntity.badRequest().build();
         }
 
